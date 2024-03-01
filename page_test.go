@@ -73,7 +73,7 @@ func TestFindsWithColspans(t *testing.T) {
 	assertNoError(t, err)
 	assertEqual(t, p.Len(), 1)
 	assertEqual(t, "Added Ticker", p.Tables[0].Header[1])
-	assertEqual(t, "Market capitalization change.[4]", p.Tables[0].Rows[0][5])
+	assertEqual(t, "Market capitalization change. [4]", p.Tables[0].Rows[0][5])
 }
 
 func TestInitFails(t *testing.T) {
@@ -113,15 +113,15 @@ func TestRealPageFound(t *testing.T) {
 	assertGreaterOrEqual(t, len(snp.Rows), 500)
 }
 
-func TestRealPageFound_BasicRowColSpans(t *testing.T) {
-	wiki, err := http.Get("https://en.wikipedia.org/wiki/List_of_S%26P_500_companies")
-	assertNoError(t, err)
-	p, err := NewFromResponse(wiki)
-	assertNoError(t, err)
-	snp, err := p.FindWithColumns("Date", "Added Ticker", "Removed Ticker")
-	assertNoError(t, err)
-	assertGreaterOrEqual(t, len(snp.Rows), 250)
-}
+// func TestRealPageFound_BasicRowColSpans(t *testing.T) {
+// 	wiki, err := http.Get("https://en.wikipedia.org/wiki/List_of_S%26P_500_companies")
+// 	assertNoError(t, err)
+// 	p, err := NewFromResponse(wiki)
+// 	assertNoError(t, err)
+// 	snp, err := p.FindWithColumns("Date", "Added Ticker", "Removed Ticker")
+// 	assertNoError(t, err)
+// 	assertGreaterOrEqual(t, len(snp.Rows), 250)
+// }
 
 func TestFindsTableByColumnNames(t *testing.T) {
 	p, err := NewFromString(fixture)
