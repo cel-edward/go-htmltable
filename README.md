@@ -1,10 +1,13 @@
 # HTML table data extractor for Go
 
-[![GoDoc](https://img.shields.io/badge/go-documentation-blue.svg)](https://pkg.go.dev/mod/github.com/nfx/go-htmltable)
-[![MIT license](https://img.shields.io/badge/License-MIT-blue.svg)](https://github.com/nfx/go-htmltable/blob/main/LICENSE)
-[![codecov](https://codecov.io/gh/nfx/go-htmltable/branch/main/graph/badge.svg)](https://codecov.io/gh/nfx/go-htmltable)
-[![build](https://github.com/nfx/go-htmltable/workflows/build/badge.svg?branch=main)](https://github.com/nfx/go-htmltable/actions?query=workflow%3Abuild+branch%3Amain)
+This is a very slightly modified fork, designed for internal use. The primary difference is this adds a blank space between inner texts that are merged.
 
+e.g. if a `<td>` cell has two elements `<div>text 1</div>` `<div>text2</div>` inside, the resulting text produced is `text 1 text 2`, rather than the original result which would have been `text 1text 2`.
+
+This proves superior for CEL use cases.
+
+
+## Original documentation
 
 `htmltable` enables structured data extraction from HTML tables and URLs and requires almost no external dependencies. Tested with Go 1.18.x and 1.19.x.
 

@@ -369,9 +369,11 @@ ROWS:
 	})
 }
 
+// CEL edit: this also adds a blank space between node texts
 func (p *Page) innerText(n *html.Node, sb *strings.Builder) {
 	if n.Type == html.TextNode {
 		sb.WriteString(strings.TrimSpace(n.Data))
+		sb.WriteString(" ")
 		return
 	}
 	if n.FirstChild == nil {
