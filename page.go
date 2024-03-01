@@ -204,7 +204,7 @@ func (p *Page) parse(n *html.Node) {
 		p.rowSpan = append(p.rowSpan, p.intAttrOr(n, "rowspan", 1))
 		var sb strings.Builder
 		p.innerText(n, &sb)
-		p.row = append(p.row, sb.String())
+		p.row = append(p.row, strings.TrimSpace(sb.String()))
 		return
 	case "tr":
 		p.finishRow()
