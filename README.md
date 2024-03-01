@@ -6,6 +6,11 @@ e.g. if a `<td>` cell has two elements `<div>text 1</div>` `<div>text2</div>` in
 
 This proves superior for CEL use cases.
 
+## Installation
+
+```bash
+go get github.com/cel-edward/go-htmltable
+```
 
 ## Original documentation
 
