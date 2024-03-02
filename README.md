@@ -6,6 +6,8 @@ e.g. if a `<td>` cell has two elements `<div>text 1</div>` `<div>text2</div>` in
 
 This proves superior for CEL use cases.
 
+The fork also removes the `header` property from Table (as it is unused in our use-case, and breaks certain tables), as well as `slice` methods.
+
 ## Installation
 
 ```bash
