@@ -56,132 +56,9 @@ func NewFromResponse(resp *http.Response) (*Page, error) {
 	return p, nil
 }
 
-// NewFromURL is same as New(ctx.Context, io.Reader), but from URL.
-//
-// In case of failure, returns `ResponseError`, that could be further inspected.
-func NewFromURL(url string) (*Page, error) {
-	resp, err := http.Get(url)
-	if err != nil {
-		return nil, err
-	}
-	if resp.Body != nil {
-		defer resp.Body.Close()
-	}
-	return NewFromResponse(resp)
-}
-
 // Len returns number of tables found on the page
 func (p *Page) Len() int {
 	return len(p.Tables)
-}
-
-// FindWithColumns performs fuzzy matching of tables by given header column names
-func (p *Page) FindWithColumns(columns ...string) (*Table, error) {
-	// realistic p won't have this much
-	found := 0xfffffff
-	for idx, table := range p.Tables {
-		matchedColumns := 0
-		for _, col := range columns {
-			for _, header := range table.Header {
-				if col == header {
-					// perform fuzzy matching of table headers
-					matchedColumns++
-				}
-			}
-		}
-		if matchedColumns != len(columns) {
-			continue
-		}
-		if found < len(p.Tables) {
-			// and do a best-effort error message, that is cleaner than pandas.read_html
-			return nil, fmt.Errorf("more than one table matches columns `%s`: "+
-				"[%d] %s and [%d] %s", strings.Join(columns, ", "),
-				found, p.Tables[found], idx, p.Tables[idx])
-		}
-		found = idx
-	}
-	if found > len(p.Tables) {
-		return nil, fmt.Errorf("cannot find table with columns: %s",
-			strings.Join(columns, ", "))
-	}
-	return p.Tables[found], nil
-}
-
-// Each row would call func with the value of the table cell from the column
-// specified in the first argument.
-//
-// Returns an error if table has no matching column name.
-func (p *Page) Each(a string, f func(a string) error) error {
-	table, err := p.FindWithColumns(a)
-	if err != nil {
-		return err
-	}
-	offsets := map[string]int{}
-	for idx, header := range table.Header {
-		offsets[header] = idx
-	}
-	for idx, row := range table.Rows {
-		if len(row) < 1 {
-			continue
-		}
-		err = f(row[offsets[a]])
-		if err != nil {
-			return fmt.Errorf("row %d: %w", idx, err)
-		}
-	}
-	return nil
-}
-
-// Each2 will get two columns specified in the first two arguments
-// and call the func with those values for every row in the table.
-//
-// Returns an error if table has no matching column names.
-func (p *Page) Each2(a, b string, f func(a, b string) error) error {
-	table, err := p.FindWithColumns(a, b)
-	if err != nil {
-		return err
-	}
-	offsets := map[string]int{}
-	for idx, header := range table.Header {
-		offsets[header] = idx
-	}
-	_1, _2 := offsets[a], offsets[b]
-	for idx, row := range table.Rows {
-		if len(row) < 2 {
-			continue
-		}
-		err = f(row[_1], row[_2])
-		if err != nil {
-			return fmt.Errorf("row %d: %w", idx, err)
-		}
-	}
-	return nil
-}
-
-// Each3 will get three columns specified in the first three arguments
-// and call the func with those values for every row in the table.
-//
-// Returns an error if table has no matching column names.
-func (p *Page) Each3(a, b, c string, f func(a, b, c string) error) error {
-	table, err := p.FindWithColumns(a, b, c)
-	if err != nil {
-		return err
-	}
-	offsets := map[string]int{}
-	for idx, header := range table.Header {
-		offsets[header] = idx
-	}
-	_1, _2, _3 := offsets[a], offsets[b], offsets[c]
-	for idx, row := range table.Rows {
-		if len(row) < 3 {
-			continue
-		}
-		err = f(row[_1], row[_2], row[_3])
-		if err != nil {
-			return fmt.Errorf("row %d: %w", idx, err)
-		}
-	}
-	return nil
 }
 
 func (p *Page) init(r io.Reader) error {
@@ -303,13 +180,10 @@ func (p *Page) finishTable() {
 	rows := [][]string{}
 	allSpans := spans{}
 	rowSkips := 0
-	gotHeader := false
 
-ROWS:
 	for y := 0; y < len(p.rows); y++ { // rows cols addressable by x
 		currentRow := []string{}
 		skipRow := false
-		k := 0 // next row columns
 		j := 0 // p.rows cols addressable by j
 		for x := 0; x < p.maxCols; x++ {
 			value, ok := allSpans.Value(x, y)
@@ -317,18 +191,13 @@ ROWS:
 				currentRow = append(currentRow, value)
 				continue
 			}
-			if gotHeader && len(p.rows[y]) == 1 && p.rows[y][0] == "" {
-				// this are most likely empty rows or table dividers
-				rowSkips++
-				continue ROWS
-			}
 			if len(p.rSpans[y]) == j {
 				break
 			}
 			rowSpan := p.rSpans[y][j]
 			colSpan := p.cSpans[y][j]
 			value = p.rows[y][j]
-			if gotHeader && (rowSpan > 1 || colSpan > 1) {
+			if rowSpan > 1 || colSpan > 1 {
 				allSpans = append(allSpans, cellSpan{
 					BeginX: x,
 					EndX:   x + colSpan,
@@ -337,35 +206,22 @@ ROWS:
 					Value:  value,
 				})
 			}
-			if !gotHeader && colSpan > 1 {
-				skipRow = true
-				// in header: merge, in row - duplicate
-				for q := 0; q < colSpan; q++ {
-					nextValue := fmt.Sprintf("%s %s", value, p.rows[y+1][k])
-					currentRow = append(currentRow, nextValue)
-					k++
-				}
-			} else {
-				currentRow = append(currentRow, value)
-			}
+			currentRow = append(currentRow, value)
+
 			j++
 		}
 		if skipRow {
 			rowSkips++
 			y++
 		}
-		gotHeader = true
 		if len(currentRow) > p.maxCols {
 			p.maxCols = len(currentRow)
 		}
 		rows = append(rows, currentRow)
 	}
-	header := rows[0]
-	rows = rows[1:]
-	Logger(p.ctx, "found table", "columns", header, "count", len(rows))
+	Logger(p.ctx, "found table", "count", len(rows))
 	p.Tables = append(p.Tables, &Table{
-		Header: header,
-		Rows:   rows,
+		Rows: rows,
 	})
 }
 
@@ -384,17 +240,14 @@ func (p *Page) innerText(n *html.Node, sb *strings.Builder) {
 	}
 }
 
-// Table is the low-level representation of raw header and rows.
+// Table is the low-level representation of rows.
 //
 // Every cell string value is truncated of its whitespace.
 type Table struct {
-	// Header holds names of headers
-	Header []string
-
 	// Rows holds slice of string slices
 	Rows [][]string
 }
 
 func (table *Table) String() string {
-	return fmt.Sprintf("Table[%s] (%d rows)", strings.Join(table.Header, ", "), len(table.Rows))
+	return fmt.Sprintf("Table (%d rows)", len(table.Rows))
 }
