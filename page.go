@@ -2,10 +2,7 @@
 package htmltable
 
 import (
-	"context"
-	"fmt"
 	"io"
-	"net/http"
 	"strconv"
 	"strings"
 
@@ -15,73 +12,74 @@ import (
 // mock for tests
 var htmlParse = html.Parse
 
-// Page is the container for all tables parseable
-type Page struct {
-	Tables []*Table
+type Parser struct {
+	Tables     []*Table
+	currentRow row
+	rows       []row
+	maxCols    int
+}
 
-	ctx      context.Context
-	rowSpans []int
-	colSpans []int
-	row      []string
-	rows     [][]string
-	maxCols  int
+// Table contains the 2D slice of string data parsed from html.
+//
+// Each string value is stripped of whitespace.
+type Table struct {
+	Data [][]string
+}
 
-	// current row
-	colSpan []int
-	rowSpan []int
-	// all
-	cSpans [][]int
-	rSpans [][]int
+// cell is an internal structure for use in parsing, representing a <td> unit
+type cell struct {
+	Value   string
+	RowSpan int
+	ColSpan int
+}
+
+// row is an internal structure for use in parsing, representing a slice of cells
+type row struct {
+	Cells []cell
 }
 
 // New returns an instance of the page with possibly more than one table
-func New(ctx context.Context, r io.Reader) (*Page, error) {
-	p := &Page{ctx: ctx}
-	return p, p.init(r)
-}
-
-// NewFromString is same as New(ctx.Context, io.Reader), but from string
-func NewFromString(r string) (*Page, error) {
-	return New(context.Background(), strings.NewReader(r))
-}
-
-// NewFromResponse is same as New(ctx.Context, io.Reader), but from http.Response.
-//
-// In case of failure, returns `ResponseError`, that could be further inspected.
-func NewFromResponse(resp *http.Response) (*Page, error) {
-	p, err := New(resp.Request.Context(), resp.Body)
+func New(r io.Reader) ([]*Table, error) {
+	parser := Parser{
+		Tables: nil,
+	}
+	err := parser.parse(r)
 	if err != nil {
 		return nil, err
 	}
-	return p, nil
+	return parser.Tables, nil
 }
 
-// Len returns number of tables found on the page
-func (p *Page) Len() int {
-	return len(p.Tables)
+// NewFromString is same as New(ctx.Context, io.Reader), but from string
+func NewFromString(r string) ([]*Table, error) {
+	return New(strings.NewReader(r))
 }
 
-func (p *Page) init(r io.Reader) error {
+func (p *Parser) parse(r io.Reader) error {
 	root, err := htmlParse(r)
 	if err != nil {
 		return err
 	}
-	p.parse(root)
+	p.traverse(root)
 	p.finishTable()
 	return nil
 }
 
-func (p *Page) parse(n *html.Node) {
+// traverse recursively walks the node and its children, handling table node elements
+func (p *Parser) traverse(n *html.Node) {
 	if n == nil {
 		return
 	}
 	switch n.Data {
 	case "td", "th":
-		p.colSpan = append(p.colSpan, p.intAttrOr(n, "colspan", 1))
-		p.rowSpan = append(p.rowSpan, p.intAttrOr(n, "rowspan", 1))
 		var sb strings.Builder
-		p.innerText(n, &sb)
-		p.row = append(p.row, strings.TrimSpace(sb.String()))
+		getInnerText(n, &sb)
+		cell := cell{
+			Value:   strings.TrimSpace(sb.String()),
+			ColSpan: intAttrOr(n, "colspan", 1),
+			RowSpan: intAttrOr(n, "rowspan", 1),
+		}
+		p.currentRow.Cells = append(p.currentRow.Cells, cell)
 		return
 	case "tr":
 		p.finishRow()
@@ -89,144 +87,129 @@ func (p *Page) parse(n *html.Node) {
 		p.finishTable()
 	}
 	for c := n.FirstChild; c != nil; c = c.NextSibling {
-		p.parse(c)
+		p.traverse(c)
 	}
 }
 
-func (p *Page) intAttrOr(n *html.Node, attr string, default_ int) int {
+// intAttrOr returns the integer value of attribute attr for node n,
+// returning defaultValue if integer parsing fails or attr is not found
+func intAttrOr(n *html.Node, attr string, defaultValue int) int {
 	for _, a := range n.Attr {
 		if a.Key != attr {
 			continue
 		}
 		val, err := strconv.Atoi(a.Val)
 		if err != nil {
-			return default_
+			return defaultValue
 		}
 		return val
 	}
-	return default_
+	return defaultValue
 }
 
-func (p *Page) finishRow() {
-	if len(p.row) == 0 {
+// finishRow handles the end of a <tr> block in the html, shifting the data into the parser's rows buffer
+func (p *Parser) finishRow() {
+	if len(p.currentRow.Cells) == 0 {
 		return
 	}
-	if len(p.row) > p.maxCols {
-		p.maxCols = len(p.row)
+	if len(p.currentRow.Cells) > p.maxCols {
+		p.maxCols = len(p.currentRow.Cells)
 	}
-	p.rows = append(p.rows, p.row)
-	p.cSpans = append(p.cSpans, p.colSpan)
-	p.rSpans = append(p.rSpans, p.rowSpan)
-	p.row = []string{}
-	p.colSpan = []int{}
-	p.rowSpan = []int{}
+	p.rows = append(p.rows, p.currentRow)
+	p.currentRow = row{}
 }
 
-type cellSpan struct {
-	BeginX, EndX int
-	BeginY, EndY int
-	Value        string
-}
+// finishTable handles the end of a <table> block in the html.
+// The string representation is calculated (handling row/colspans)
+// and the data is appended to parser.Tables
+func (p *Parser) finishTable() {
 
-func (d *cellSpan) Match(x, y int) bool {
-	if d.BeginX > x {
-		return false
-	}
-	if d.EndX <= x {
-		return false
-	}
-	if d.BeginY > y {
-		return false
-	}
-	if d.EndY <= y {
-		return false
-	}
-	return true
-}
-
-type spans []cellSpan
-
-func (s spans) Value(x, y int) (string, bool) {
-	for _, v := range s {
-		if !v.Match(x, y) {
-			continue
-		}
-		return v.Value, true
-	}
-	return "", false
-}
-
-func (p *Page) finishTable() {
-	defer func() {
-		if r := recover(); r != nil {
-			firstRow := []string{}
-			if len(p.rows) > 0 {
-				firstRow = p.rows[0][:]
-			}
-			Logger(p.ctx, "unparsable table", "panic", fmt.Sprintf("%v", r), "firstRow", firstRow)
-		}
-		p.rows = [][]string{}
-		p.colSpans = []int{}
-		p.rowSpans = []int{}
-		p.cSpans = [][]int{}
-		p.rSpans = [][]int{}
-		p.maxCols = 0
-	}()
 	p.finishRow()
 	if len(p.rows) == 0 {
 		return
 	}
 
-	rows := [][]string{}
-	allSpans := spans{}
-	rowSkips := 0
+	tableData := [][]string{}
 
-	for y := 0; y < len(p.rows); y++ { // rows cols addressable by x
-		currentRow := []string{}
-		skipRow := false
-		j := 0 // p.rows cols addressable by j
-		for x := 0; x < p.maxCols; x++ {
-			value, ok := allSpans.Value(x, y)
-			if ok {
-				currentRow = append(currentRow, value)
-				continue
+	// carryover handles row spans > 1, by keeping track of cells that need to be handled
+	// in subsequent rows during the main row loop
+	type carryover struct {
+		Value   string // value of cell
+		Index   int    // column index of the carryover
+		RowSpan int    // how many spans left still in the carryover
+	}
+	var rowCarryover []carryover
+
+	for _, row := range p.rows {
+		var rowData []string
+		nextRowCarryover := []carryover{}
+		currentIndex := 0
+
+		for _, cell := range row.Cells {
+			// if there is carryover from prior rows, make sure they're accounted for
+			// e.g. if index 3 had a carryover this needs to come the cell that otherwise is the fourth element in the row
+			for len(rowCarryover) > 0 && rowCarryover[0].Index <= currentIndex {
+				// pop out the first item
+				co := rowCarryover[0]
+				if len(rowCarryover) > 1 {
+					rowCarryover = rowCarryover[1:]
+				} else {
+					rowCarryover = nil
+				}
+
+				rowData = append(rowData, co.Value)
+				// add to the next row if there is still additional rowspan
+				if co.RowSpan > 1 {
+					nextRowCarryover = append(nextRowCarryover, carryover{
+						Value:   co.Value,
+						RowSpan: co.RowSpan - 1,
+						Index:   co.Index,
+					})
+				}
 			}
-			if len(p.rSpans[y]) == j {
-				break
+
+			// now we can start copying values from the current cell
+			for i := 0; i < cell.ColSpan; i++ {
+				rowData = append(rowData, cell.Value)
+				// account for rowspan into subsequent rows
+				if cell.RowSpan > 1 {
+					co := carryover{
+						Value:   cell.Value,
+						RowSpan: cell.RowSpan - 1,
+						Index:   currentIndex,
+					}
+					nextRowCarryover = append(nextRowCarryover, co)
+				}
+				currentIndex++
 			}
-			rowSpan := p.rSpans[y][j]
-			colSpan := p.cSpans[y][j]
-			value = p.rows[y][j]
-			if rowSpan > 1 || colSpan > 1 {
-				allSpans = append(allSpans, cellSpan{
-					BeginX: x,
-					EndX:   x + colSpan,
-					BeginY: y,
-					EndY:   y + rowSpan,
-					Value:  value,
+		}
+
+		// this is for any columns that only exist at the bottom due to rowspan (i.e. no <td> standalone)
+		for _, co := range rowCarryover {
+			rowData = append(rowData, co.Value)
+			// add to the next row if there is still additional rowspan
+			if co.RowSpan > 1 {
+				nextRowCarryover = append(nextRowCarryover, carryover{
+					Value:   co.Value,
+					RowSpan: co.RowSpan - 1,
+					Index:   co.Index,
 				})
 			}
-			currentRow = append(currentRow, value)
+		}
 
-			j++
-		}
-		if skipRow {
-			rowSkips++
-			y++
-		}
-		if len(currentRow) > p.maxCols {
-			p.maxCols = len(currentRow)
-		}
-		rows = append(rows, currentRow)
+		tableData = append(tableData, rowData)
+		rowCarryover = nextRowCarryover
 	}
-	Logger(p.ctx, "found table", "count", len(rows))
-	p.Tables = append(p.Tables, &Table{
-		Rows: rows,
-	})
+	p.Tables = append(p.Tables, &Table{Data: tableData})
+
+	p.maxCols = 0
+	p.currentRow = row{}
+	p.rows = nil
 }
 
-// CEL edit: this also adds a blank space between node texts
-func (p *Page) innerText(n *html.Node, sb *strings.Builder) {
+// getInnerText retrieves any text from child nodes of n and adds it to sb.
+// Texts from different nodes will have a whitespace inserted between.
+func getInnerText(n *html.Node, sb *strings.Builder) {
 	if n.Type == html.TextNode {
 		sb.WriteString(strings.TrimSpace(n.Data))
 		sb.WriteString(" ")
@@ -236,18 +219,40 @@ func (p *Page) innerText(n *html.Node, sb *strings.Builder) {
 		return
 	}
 	for c := n.FirstChild; c != nil; c = c.NextSibling {
-		p.innerText(c, sb)
+		getInnerText(c, sb)
 	}
 }
 
-// Table is the low-level representation of rows.
-//
-// Every cell string value is truncated of its whitespace.
-type Table struct {
-	// Rows holds slice of string slices
-	Rows [][]string
-}
+// type cellSpan struct {
+// 	BeginX, EndX int
+// 	BeginY, EndY int
+// 	Value        string
+// }
 
-func (table *Table) String() string {
-	return fmt.Sprintf("Table (%d rows)", len(table.Rows))
-}
+// func (d *cellSpan) Match(x, y int) bool {
+// 	if d.BeginX > x {
+// 		return false
+// 	}
+// 	if d.EndX <= x {
+// 		return false
+// 	}
+// 	if d.BeginY > y {
+// 		return false
+// 	}
+// 	if d.EndY <= y {
+// 		return false
+// 	}
+// 	return true
+// }
+
+// type spans []cellSpan
+
+// func (s spans) Value(x, y int) (string, bool) {
+// 	for _, v := range s {
+// 		if !v.Match(x, y) {
+// 			continue
+// 		}
+// 		return v.Value, true
+// 	}
+// 	return "", false
+// }

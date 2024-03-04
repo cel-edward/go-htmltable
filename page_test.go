@@ -1,10 +1,8 @@
 package htmltable
 
 import (
-	"context"
 	"fmt"
 	"io"
-	"net/http"
 	"strings"
 	"testing"
 
@@ -27,9 +25,9 @@ const fixture = `<body>
 </body>`
 
 func TestFindsAllTables(t *testing.T) {
-	p, err := NewFromString(fixture)
+	ts, err := NewFromString(fixture)
 	assertNoError(t, err)
-	assertEqual(t, p.Len(), 2)
+	assertEqual(t, len(ts), 2)
 }
 
 // added public domain data from https://en.wikipedia.org/wiki/List_of_S&P_500_companies
@@ -69,10 +67,10 @@ const fixtureColspans = `<table>
 </table>`
 
 func TestFindsWithColspans(t *testing.T) {
-	p, err := NewFromString(fixtureColspans)
+	ts, err := NewFromString(fixtureColspans)
 	assertNoError(t, err)
-	assertEqual(t, p.Len(), 1)
-	assertEqual(t, "Market capitalization change. [4]", p.Tables[0].Rows[2][5])
+	assertEqual(t, len(ts), 1)
+	assertEqual(t, "Market capitalization change. [4]", ts[0].Data[2][5])
 }
 
 func TestInitFails(t *testing.T) {
@@ -83,26 +81,7 @@ func TestInitFails(t *testing.T) {
 	htmlParse = func(r io.Reader) (*html.Node, error) {
 		return nil, fmt.Errorf("nope")
 	}
-	_, err := New(context.Background(), strings.NewReader(".."))
+	_, err := New(strings.NewReader(".."))
 
 	assertEqualError(t, err, "nope")
-}
-
-func TestNewFromHttpResponseError(t *testing.T) {
-	prev := htmlParse
-	t.Cleanup(func() {
-		htmlParse = prev
-	})
-	htmlParse = func(r io.Reader) (*html.Node, error) {
-		return nil, fmt.Errorf("nope")
-	}
-	_, err := NewFromResponse(&http.Response{
-		Request: &http.Request{},
-	})
-	assertEqualError(t, err, "nope")
-}
-
-func TestNilNodeReturns(t *testing.T) {
-	p := &Page{}
-	p.parse(nil)
 }
