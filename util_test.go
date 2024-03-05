@@ -30,13 +30,3 @@ func assertEqual(t *testing.T, a, b any) {
 		t.Errorf("%#v (expected) != %#v (got)", a, b)
 	}
 }
-
-type comparable interface {
-	int | string
-}
-
-func assertGreaterOrEqual[T comparable](t *testing.T, a, b T) {
-	if !(a >= b) {
-		t.Errorf("%#v (expected) >= %#v (got)", a, b)
-	}
-}

@@ -3,6 +3,7 @@ package htmltable
 
 import (
 	"io"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -22,9 +23,7 @@ type Parser struct {
 // Table contains the 2D slice of string data parsed from html.
 //
 // Each string value is stripped of whitespace.
-type Table struct {
-	Data [][]string
-}
+type Table [][]string
 
 // cell is an internal structure for use in parsing, representing a <td> unit
 type cell struct {
@@ -34,9 +33,7 @@ type cell struct {
 }
 
 // row is an internal structure for use in parsing, representing a slice of cells
-type row struct {
-	Cells []cell
-}
+type row []cell
 
 // New returns an instance of the page with possibly more than one table
 func New(r io.Reader) ([]*Table, error) {
@@ -72,14 +69,18 @@ func (p *Parser) traverse(n *html.Node) {
 	}
 	switch n.Data {
 	case "td", "th":
+		rowspan, colspan, isDisplayNone := getAttributes(n)
+		if isDisplayNone {
+			return
+		}
 		var sb strings.Builder
 		getInnerText(n, &sb)
 		cell := cell{
 			Value:   strings.TrimSpace(sb.String()),
-			ColSpan: intAttrOr(n, "colspan", 1),
-			RowSpan: intAttrOr(n, "rowspan", 1),
+			ColSpan: colspan,
+			RowSpan: rowspan,
 		}
-		p.currentRow.Cells = append(p.currentRow.Cells, cell)
+		p.currentRow = append(p.currentRow, cell)
 		return
 	case "tr":
 		p.finishRow()
@@ -91,29 +92,43 @@ func (p *Parser) traverse(n *html.Node) {
 	}
 }
 
-// intAttrOr returns the integer value of attribute attr for node n,
-// returning defaultValue if integer parsing fails or attr is not found
-func intAttrOr(n *html.Node, attr string, defaultValue int) int {
+// getAttributes returns attributes for node n that are relevant for parsing,
+// namely rowspan, colspan, and display:none
+//
+// If not found, defaults returned are row/colspan = 1 and isDisplayNone = false
+func getAttributes(n *html.Node) (rowspan int, colspan int, isDisplayNone bool) {
+	colspan = 1
+	rowspan = 1
+	isDisplayNone = false
+	displayNoneRegexp := regexp.MustCompile(`display:\s*none`)
 	for _, a := range n.Attr {
-		if a.Key != attr {
-			continue
+		key := strings.ToLower(a.Key)
+		if key == "colspan" {
+			val, err := strconv.Atoi(a.Val)
+			if err == nil {
+				colspan = val
+			}
+		} else if key == "rowspan" {
+			val, err := strconv.Atoi(a.Val)
+			if err == nil {
+				rowspan = val
+			}
+		} else if key == "style" {
+			if displayNoneRegexp.Match([]byte(a.Val)) {
+				isDisplayNone = true
+			}
 		}
-		val, err := strconv.Atoi(a.Val)
-		if err != nil {
-			return defaultValue
-		}
-		return val
 	}
-	return defaultValue
+	return rowspan, colspan, isDisplayNone
 }
 
 // finishRow handles the end of a <tr> block in the html, shifting the data into the parser's rows buffer
 func (p *Parser) finishRow() {
-	if len(p.currentRow.Cells) == 0 {
+	if len(p.currentRow) == 0 {
 		return
 	}
-	if len(p.currentRow.Cells) > p.maxCols {
-		p.maxCols = len(p.currentRow.Cells)
+	if len(p.currentRow) > p.maxCols {
+		p.maxCols = len(p.currentRow)
 	}
 	p.rows = append(p.rows, p.currentRow)
 	p.currentRow = row{}
@@ -145,7 +160,7 @@ func (p *Parser) finishTable() {
 		nextRowCarryover := []carryover{}
 		currentIndex := 0
 
-		for _, cell := range row.Cells {
+		for _, cell := range row {
 			// if there is carryover from prior rows, make sure they're accounted for
 			// e.g. if index 3 had a carryover this needs to come the cell that otherwise is the fourth element in the row
 			for len(rowCarryover) > 0 && rowCarryover[0].Index <= currentIndex {
@@ -200,7 +215,8 @@ func (p *Parser) finishTable() {
 		tableData = append(tableData, rowData)
 		rowCarryover = nextRowCarryover
 	}
-	p.Tables = append(p.Tables, &Table{Data: tableData})
+	newTable := Table(tableData)
+	p.Tables = append(p.Tables, &newTable)
 
 	p.maxCols = 0
 	p.currentRow = row{}
