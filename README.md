@@ -14,7 +14,9 @@ Pass an html string into `New()` or `NewFromString()`.
 
 rowspans and colspans are 'demerged', with the contained value copied into each spanned cell.
 
-An example html and result can be found in `parse_test.go`
+Cells with attribute `style="[...]display:none[...]"` are ignored.
+
+Example html and results can be found in `parse_test.go`
 
 # Notes
 
